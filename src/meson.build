@@ -5,13 +5,16 @@ phosphor_logging = dependency('phosphor-logging')
 sdbusplus = dependency('sdbusplus')
 
 rbmc_data_sync_sources = [
-    'rbmc_data_sync_main.cpp'
+    'rbmc_data_sync_main.cpp',
+    'parser.cpp',
+    'manager.cpp'
   ]
 
 rbmc_data_sync_dependencies = [
     phosphor_dbus_interfaces,
     phosphor_logging,
     sdbusplus,
+    conf_h_dep,
   ]
 
 inc_dir = include_directories('.')
