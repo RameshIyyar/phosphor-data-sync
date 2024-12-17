@@ -1,30 +1,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#include "parser.hpp"
+#pragma once
 
-#include <phosphor-logging/lg2.hpp>
+#include "data_sync_config.hpp"
 
-#include <memory>
+#include <filesystem>
+#include <vector>
 
+namespace data_sync
+{
+
+namespace fs = std::filesystem;
+
+/**
+ * @class Manager
+ *
+ * @brief This class manages all configured data for synchronization
+ *        between BMCs.
+ */
 class Manager
 {
   public:
-    ~Manager() = default;
     Manager(const Manager&) = delete;
     Manager& operator=(const Manager&) = delete;
-    Manager(Manager&&) = default;
-    Manager& operator=(Manager&&) = default;
+    Manager(Manager&&) = delete;
+    Manager& operator=(Manager&&) = delete;
+    ~Manager() = default;
 
-    Manager() : _syncDataConfig(std::make_unique<SyncDataConfig>()) {}
-
-    /*
-     *API to start the periodic sync
+    /**
+     * @brief The constructor parses the configuration, monitors the data, and
+     *        synchronizes it.
+     *
+     * @param[in] dataSyncCfgDir - The data sync configuration directory
      */
-    void startPeriodicSync();
+    Manager(const fs::path& dataSyncCfgDir);
 
   private:
     /**
-     * @brief The unique pointer to the SyncDataConfig class object.
+     * @brief A helper API to parse the data sync configuration
+     *
+     * @param[in] dataSyncCfgDir - The data sync configuration directory
+     *
+     * @return NULL
+     *
+     * @note It will continue parsing all files even if one file fails to parse.
      */
-    std::unique_ptr<SyncDataConfig> _syncDataConfig;
+    void parseConfiguration(const fs::path& dataSyncCfgDir);
+
+    /**
+     * @brief A helper API to print data sync configuration
+     *
+     * @return NULL
+     */
+    void printConfig();
+
+    /**
+     * @brief The list of data to synchronize.
+     */
+    std::vector<config::DataSyncConfig> _dataSyncConfiguration;
 };
+
+} // namespace data_sync

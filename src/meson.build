@@ -6,7 +6,7 @@ sdbusplus = dependency('sdbusplus')
 
 rbmc_data_sync_sources = [
     'rbmc_data_sync_main.cpp',
-    'parser.cpp',
+    'data_sync_config.cpp',
     'manager.cpp'
   ]
 
