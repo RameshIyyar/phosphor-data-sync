@@ -122,6 +122,18 @@ sdbusplus::async::task<> Manager::startSyncEvents()
 }
 
 // NOLINTNEXTLINE
+void Manager::rsyncWrapper(const config::DataSyncConfig& dataSyncCfg)
+{
+    // TODO
+    lg2::info("Path: {PATH}", "PATH", dataSyncCfg._path);
+    if (dataSyncCfg._periodicityInSec.has_value())
+    {
+        lg2::info("with periodicity: {PERIODICITY}", "PERIODICITY",
+                  dataSyncCfg._periodicityInSec.value().count());
+    }
+}
+
+// NOLINTNEXTLINE
 sdbusplus::async::task<> Manager::monitorDataToSync(
     [[maybe_unused]] const config::DataSyncConfig& dataSyncCfg)
 {
@@ -133,7 +145,13 @@ sdbusplus::async::task<> Manager::monitorDataToSync(
 sdbusplus::async::task<> Manager::monitorTimerToSync(
     [[maybe_unused]] const config::DataSyncConfig& dataSyncCfg)
 {
-    // TODO Create timer events to monitor data for sync
+    while (!_ctx.stop_requested())
+    {
+        co_await sdbusplus::async::sleep_for(
+            _ctx, std::chrono::seconds(dataSyncCfg._periodicityInSec.value()));
+        // Call rsync Wrapper
+        rsyncWrapper(dataSyncCfg);
+    }
     co_return;
 }
 
