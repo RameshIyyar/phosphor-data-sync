@@ -29,7 +29,7 @@ sdbusplus::async::task<> Manager::init()
     co_await sdbusplus::async::execution::when_all(
         parseConfiguration(), _extDataIfaces->startExtDataFetches());
 
-    co_return;
+    co_return _ctx.spawn(startSyncEvents());
 }
 
 // NOLINTNEXTLINE
@@ -76,6 +76,64 @@ sdbusplus::async::task<> Manager::parseConfiguration()
         std::ranges::for_each(fs::directory_iterator(_dataSyncCfgDir), parse);
     }
 
+    co_return;
+}
+
+// NOLINTNEXTLINE
+sdbusplus::async::task<> Manager::startSyncEvents()
+{
+    auto syncData = [this](const auto& dataSyncCfg) -> bool {
+        if ((dataSyncCfg._syncDirection ==
+             config::SyncDirection::Bidirectional) ||
+            ((dataSyncCfg._syncDirection ==
+              config::SyncDirection::Active2Passive) &&
+             this->_extDataIfaces->bmcRole() == ext_data::BMCRole::Active) ||
+            ((dataSyncCfg._syncDirection ==
+              config::SyncDirection::Passive2Active) &&
+             this->_extDataIfaces->bmcRole() == ext_data::BMCRole::Passive))
+        {
+            return true;
+        }
+        else
+        {
+            // TODO Trace is required, will overflow?
+            lg2::info(
+                "Sync is not required for [{PATH}] due to "
+                "SyncDirection: {SYNC_DIRECTION} BMCRole: {BMC_ROLE}",
+                "PATH", dataSyncCfg._path, "SYNC_DIRECTION",
+                dataSyncCfg.getSyncDirectionInStr(), "BMC_ROLE",
+                ext_data::RBMC::convertRoleToString(_extDataIfaces->bmcRole()));
+        }
+        return false;
+    };
+
+    std::ranges::for_each(_dataSyncConfiguration | std::views::filter(syncData),
+                          [this](const auto& dataSyncCfg) {
+        if (dataSyncCfg._syncType == config::SyncType::Immediate)
+        {
+            this->_ctx.spawn(this->monitorDataToSync(dataSyncCfg));
+        }
+        else if (dataSyncCfg._syncType == config::SyncType::Periodic)
+        {
+            this->_ctx.spawn(this->monitorTimerToSync(dataSyncCfg));
+        }
+    });
+    co_return;
+}
+
+// NOLINTNEXTLINE
+sdbusplus::async::task<> Manager::monitorDataToSync(
+    [[maybe_unused]] const config::DataSyncConfig& dataSyncCfg)
+{
+    // TODO Create inotify events to monitor data for sync
+    co_return;
+}
+
+// NOLINTNEXTLINE
+sdbusplus::async::task<> Manager::monitorTimerToSync(
+    [[maybe_unused]] const config::DataSyncConfig& dataSyncCfg)
+{
+    // TODO Create timer events to monitor data for sync
     co_return;
 }
 
