@@ -92,3 +92,21 @@ TEST_F(ManagerTest, ParseDataSyncCfg)
 
     EXPECT_TRUE(manager.containsDataSyncCfg(ManagerTest::jsonData["Files"][0]));
 }
+
+// TEST_F(ManagerTest, PeriodicDataSyncTest)
+// {
+//     const auto configJSON = R"(
+//         {
+//             "Path": "/file/path/to/sync",
+//             "Description": "Add details about the data and purpose of the
+//             synchronization", "SyncDirection": "Active2Passive", "SyncType":
+//             "Periodic", "Periodicity": "PT30S", "RetryAttempts": 1,
+//             "RetryInterval": "P1D"
+//         }
+
+//     )"_json;
+//     data_sync::config::DataSyncConfig dataSyncConfig(configJSON);
+//     // ctx.spawn(manager.monitorTimerToSync(dataSyncConfig)); // cannot do
+//     this,
+//     // as private code
+// }
