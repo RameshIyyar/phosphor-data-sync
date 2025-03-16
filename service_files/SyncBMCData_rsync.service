@@ -1,5 +1,7 @@
 [Unit]
 Description=Rsync daemon for Redundant BMC Data Synchronization
+Requires=SyncBMCData_stunnel.service
+After=SyncBMCData_stunnel.service
 
 [Service]
 ExecStart=/usr/bin/sh -c "/usr/bin/rsync --no-detach --daemon --config=/etc/phosphor-data-sync/rsync/bmc$(fw_printenv -n bmc_position)_rsyncd.conf"
