@@ -1,0 +1,9 @@
+[Unit]
+Description=Rsync daemon for Redundant BMC Data Synchronization
+
+[Service]
+ExecStart=/usr/bin/sh -c "/usr/bin/rsync --no-detach --daemon --config=/etc/phosphor-data-sync/rsync/bmc$(fw_printenv -n bmc_position)_rsyncd.conf"
+Restart=always
+
+[Install]
+# This service will started by the data sync if the Redundancy is enabled
