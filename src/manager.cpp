@@ -11,6 +11,7 @@
 #include <nlohmann/json.hpp>
 #include <phosphor-logging/lg2.hpp>
 
+#include <algorithm>
 #include <cstdlib>
 #include <exception>
 #include <fstream>
@@ -235,6 +236,25 @@ sdbusplus::async::task<> Manager::startSyncEvents()
     });
     co_return;
 }
+std::string Manager::frameExcludeString(const fs::path& cfgPath, const
+        std::vector<fs::path> excludeList)
+{
+    using namespace std::string_literals;
+    std::string excludeListStr{};
+    auto commaSeparatedFold = [&cfgPath](std::string listToStr,
+                                    const fs::path& entry)
+    {
+        return std::move(listToStr) + " --exclude=" +
+                    fs::relative(entry,cfgPath).string();
+    };
+    excludeListStr.append(std::ranges::fold_left(excludeList, excludeListStr,
+                                commaSeparatedFold));
+
+    lg2::debug("The converted list string : {LISTSTRING}", "LISTSTRING",
+                    excludeListStr);
+
+    return excludeListStr;
+}
 
 void Manager::getRsyncCmd(const std::string& src, const std::string& dest, std::string&
                     cmd, bool operation)
@@ -338,7 +358,8 @@ sdbusplus::async::task<>
 
         // Create watcher for the dataSyncCfg._path
         watch::inotify::DataWatcher dataWatcher(
-            _ctx, IN_NONBLOCK, eventMasksToWatch, dataSyncCfg._path);
+            _ctx, IN_NONBLOCK, eventMasksToWatch, dataSyncCfg._path,
+            dataSyncCfg._excludeList);
 
         while (!_ctx.stop_requested() && !_syncBMCDataIface.disable_sync())
         {
