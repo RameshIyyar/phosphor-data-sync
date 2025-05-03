@@ -186,11 +186,10 @@ std::optional<std::vector<EventInfo>> DataWatcher::readEvents()
         auto* receivedEvent = reinterpret_cast<inotify_event*>(&buffer[offset]);
 
         lg2::debug("receivedEvent->name : {NAME}", "NAME", receivedEvent->name);
-        lg2::debug("receivedEvent->mask : {MASK}", "MASK", receivedEvent->mask);
-        /*if (receivedEvent->name[0] == '.')
-        {
-            return std::nullopt;
-        }*/
+        lg2::debug("receivedEvent->mask : {MASK}({NAME})", "MASK",
+            receivedEvent->mask, "NAME", eventName(receivedEvent->mask));
+        lg2::debug("receivedEvent->cookie : {COOKIE}", "COOKIE",
+        receivedEvent->cookie);
         receivedEvents.emplace_back(receivedEvent->wd, receivedEvent->name,
                                     receivedEvent->mask);
 
