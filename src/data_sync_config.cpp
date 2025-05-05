@@ -32,6 +32,11 @@ DataSyncConfig::DataSyncConfig(const nlohmann::json& config,
                   .value_or(SyncType::Immediate)),
     _stateDrivenSync(StateDrivenSync())
 {
+    if (fs::is_symlink(_path))
+    {
+        _path = fs::canonical(_path);
+    }
+
     // Initiailze optional members
     if (config.contains("DestinationPath"))
     {

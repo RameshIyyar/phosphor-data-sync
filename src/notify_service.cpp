@@ -154,6 +154,8 @@ sdbusplus::async::task<> NotifyService::init(sdbusplus::async::context& ctx,
                                             fs::path notifyFilePath)
 {
     nlohmann::json notifyfileData = file_operations::readfromFile(notifyFilePath);
+    lg2::info("Sync Notify service: {SERVICE}", "SERVICE",
+              notifyfileData["NotifyInfo"]["NotifyServices"]);
     if (notifyfileData["NotifyInfo"]["Mode"] == "DBus")
     {
         //Send DBUS notification

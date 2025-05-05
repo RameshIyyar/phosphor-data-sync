@@ -41,3 +41,17 @@ executable(
     install: true,
     install_dir: libexecdir_installdir,
 )
+
+executable(
+    'pds_benchmark',
+    'benchmark.cpp',
+    install: true,
+    install_dir: libexecdir_installdir,
+)
+
+executable(
+    'pds_fanotify',
+    'fanotify.cpp',
+    install: true,
+    install_dir: libexecdir_installdir,
+)

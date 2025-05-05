@@ -14,10 +14,13 @@
 #include <algorithm>
 #include <cstdlib>
 #include <exception>
+#include <fcntl.h>
 #include <fstream>
 #include <iterator>
+#include <spawn.h>
 #include <string>
 #include <string_view>
+#include <sys/resource.h>
 
 namespace data_sync
 {
@@ -37,6 +40,12 @@ sdbusplus::async::task<> Manager::init()
 {
     co_await sdbusplus::async::execution::when_all(
         parseConfiguration(), _extDataIfaces->startExtDataFetches());
+
+#if 0
+    co_await syncData(*(_dataSyncConfiguration.begin()),
+            "--dry-run /var/lib/phosphor-data-sync/bmc_data_bkp/dry_run",
+            "/var/lib/phosphor-data-sync/bmc_data_bkp/dry_run_dest");
+#endif
 
     if (_syncBMCDataIface.disable_sync())
     {
@@ -133,7 +142,8 @@ sdbusplus::async::task<> Manager::monitorServiceNotifications()
 
         //Start watching the NOTIFY_SERVICE_DIR
         watch::inotify::DataWatcher notifyWatcher(_ctx, IN_NONBLOCK,
-                        IN_CLOSE_WRITE | IN_MOVED_TO, NOTIFY_SERVICE_DIR);
+                        IN_CLOSE_WRITE | IN_MOVED_TO, NOTIFY_SERVICE_DIR,
+                        {}, {});
 
         while (!_ctx.stop_requested() && !_syncBMCDataIface.disable_sync())
         {
@@ -150,8 +160,7 @@ sdbusplus::async::task<> Manager::monitorServiceNotifications()
                 }
                 for (const auto& [path, Op] : dataOperations)
                 {
-                    lg2::info("Invoking notify service as {PATH} created",
-                                "PATH", path);
+                    lg2::debug("Received sync notification {PATH}", "PATH", path);
                     notify::NotifyService notifyService(_ctx, path);
                 }
             }
@@ -181,12 +190,14 @@ bool Manager::isSyncEligible(const config::DataSyncConfig& dataSyncCfg)
     }
     else
     {
+#if 0
         // TODO Trace is required, will overflow?
         lg2::debug("Sync is not required for [{PATH}] due to "
                    "SyncDirection: {SYNC_DIRECTION} BMCRole: {BMC_ROLE}",
                    "PATH", dataSyncCfg._path, "SYNC_DIRECTION",
                    dataSyncCfg.getSyncDirectionInStr(), "BMC_ROLE",
-                   _extDataIfaces->bmcRole());
+                   ext_data::RBMC::convertRoleToString(_extDataIfaces->bmcRole()));
+#endif
     }
     return false;
 }
@@ -234,6 +245,10 @@ sdbusplus::async::task<> Manager::startSyncEvents()
             this->_ctx.spawn(this->monitorTimerToSync(dataSyncCfg));
         }
     });
+
+    using namespace std::chrono_literals;
+    co_await sdbusplus::async::sleep_for(_ctx, 500ms);
+    lg2::debug("Total No of watchers: {NO_WACTHERS}", "NO_WACTHERS", _noOfWatchers);
     co_return;
 }
 
@@ -272,8 +287,8 @@ std::string Manager::frameExcludeString(const fs::path& cfgPath, const
     excludeListStr.append(std::ranges::fold_left(excludeList, excludeListStr,
                                 commaSeparatedFold));
 
-    lg2::debug("The converted list string : {LISTSTRING}", "LISTSTRING",
-                    excludeListStr);
+    lg2::debug("Excluded Paths: {LISTSTRING} for [{PATH}]", "LISTSTRING",
+                    excludeListStr, "PATH", cfgPath);
 
     return excludeListStr;
 }
@@ -290,7 +305,8 @@ void Manager::getRsyncCmd(const std::string& src, const std::string& dest, std::
     else
     {
         // Appending the required flags to notify the siblng
-        cmd.append("rsync --compress --remove-source-files"s);
+        //cmd.append("rsync --compress --remove-source-files"s);
+        cmd.append("rsync --compress"s);
     }
 
     cmd.append(" "s + src);
@@ -298,16 +314,521 @@ void Manager::getRsyncCmd(const std::string& src, const std::string& dest, std::
 #ifdef UNIT_TEST
     cmd.append(" "s);
 #else
-    cmd.append(" rsync://localhost:"s);
-    static const auto* siblingBMCRsyncdPort =
-        _extDataIfaces->siblingBmcPos() == 0 ? BMC0_RSYNC_PORT
-                                             : BMC1_RSYNC_PORT;
-    cmd.append(siblingBMCRsyncdPort);
+    static const std::string rsyncdURL(std::format(" rsync://localhost:{}/{}",
+            (_extDataIfaces->siblingBmcPos() == 0 ? BMC0_RSYNC_PORT
+                                                  : BMC1_RSYNC_PORT),
+            RSYNCD_MODULE_NAME));
+    cmd.append(rsyncdURL);
 #endif
 
     // Append dest path.
     cmd.append(dest);
+}
 
+bool Manager::tryWith(const std::string& filname)
+{
+    fs::path filePath("/tmp/pds");
+    filePath /= filname;
+
+    auto ret = fs::exists(filePath);
+
+#if 0
+    if (ret)
+    {
+        lg2::debug("Try with [{TRY}]", "TRY", filePath.filename());
+    }
+#endif
+
+    return ret;
+}
+
+std::pair<int, std::string> Manager::tryWithSystem(const std::string& cmd)
+{
+    int result = std::system(cmd.c_str());
+    if (result != 0)
+    {
+        lg2::error("Sync is failed, command[{CMD}] errorCode[{ERRCODE}] ",
+                   "CMD", cmd, "ERRCODE", result);
+    }
+    return std::make_pair(result, "");
+}
+
+std::pair<int, std::string> Manager::tryWithPopen(const std::string& cmd)
+{
+    std::string out;
+
+    std::string cmdWithRedirectErr(cmd + " 2>&1");
+    FILE* pipe = popen(cmdWithRedirectErr.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        lg2::error("popen call failed while running command [{CMD}]",
+                "CMD", cmd);
+        return std::make_pair(-1, "");
+    }
+
+    std::array<char, 256> buffer{};
+    while (fgets(buffer.data(), buffer.size(), pipe) != nullptr)
+    {
+        out += buffer.data();
+    }
+
+    int status = pclose(pipe);
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (exitCode != 0)
+    {
+        lg2::error("Sync is failed, command[{CMD}] errorCode[{ERRCODE}] "
+                   "Output[{OUT}]", "CMD", cmd, "ERRCODE", exitCode, "OUT", out);
+    }
+    return std::make_pair(exitCode, out);
+}
+
+sdbusplus::async::task<std::string> Manager::waitForCmdCompletion(int fd)
+{
+    // Set non-blocking
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags == -1 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1)
+    {
+        lg2::error("fcntl failed");
+        co_return "";
+    }
+
+    std::string output;
+    std::array<char, 256> buffer{};
+    std::unique_ptr<sdbusplus::async::fdio> fdioInstance =
+        std::make_unique<sdbusplus::async::fdio>(_ctx, fd);
+
+    while (!_ctx.stop_requested())
+    {
+        co_await fdioInstance->next();
+
+        int n = read(fd, buffer.data(), buffer.size());
+        if (n > 0)
+        {
+            output += buffer.data();
+        }
+        else if (n == 0)
+        {
+            // EOF
+            break;
+        }
+        else if (errno == EAGAIN || errno == EWOULDBLOCK)
+        {
+            lg2::debug("EAGAIN || EWOULDBLOCK");
+            continue;
+        }
+        else
+        {
+            lg2::error("read is failed [{ERROR}]", "ERROR", strerror(errno));
+            break;
+        }
+    }
+
+    fdioInstance.reset();
+
+    co_return output;
+}
+
+sdbusplus::async::task<std::pair<int, std::string>> Manager::tryWithPopenNonBlock(const std::string& cmd)
+{
+    std::string cmdWithRedirectErr(cmd + " 2>&1");
+    FILE* pipe = popen(cmdWithRedirectErr.c_str(), "r");
+    if (pipe == nullptr)
+    {
+        lg2::error("popen call failed while running command [{CMD}]",
+                "CMD", cmd);
+        co_return std::make_pair(-1, "");
+    }
+
+    int fd = fileno(pipe);
+    if (fd == -1)
+    {
+        lg2::error("fileno call failed while running command [{CMD}]",
+                "CMD", cmd);
+        co_return std::make_pair(-1, "");
+    }
+
+    auto output = co_await waitForCmdCompletion(fd);
+
+    int status = pclose(pipe);
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (exitCode != 0)
+    {
+        lg2::error("Sync is failed, command[{CMD}] errorCode[{ERRCODE}] "
+                   "Output[{OUT}]", "CMD", cmd, "ERRCODE", exitCode, "OUT", output);
+    }
+
+    co_return std::make_pair(exitCode, output);
+}
+
+sdbusplus::async::task<std::pair<int, std::string>> Manager::tryWithFork(const std::string& cmd)
+{
+    int pipefd[2];
+    if (pipe(pipefd) == -1)
+    {
+        lg2::error("pipe is failed");
+        co_return std::make_pair(-1, "");
+    }
+
+    pid_t pid = fork();
+    if (pid == -1)
+    {
+        lg2::error("fork is failed");
+        co_return std::make_pair(-1, "");
+    }
+    else if (pid == 0)
+    {
+        // Child
+        close(pipefd[0]); // Close read end
+        dup2(pipefd[1], STDOUT_FILENO); // Redirect stdout to pipe
+        dup2(pipefd[1], STDERR_FILENO); // Optionally redirect stderr too
+        close(pipefd[1]);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), (char*)NULL);
+        lg2::error("execl is failed");
+        _exit(EXIT_FAILURE); // Ensure child exits
+    }
+
+    // Parent
+    close(pipefd[1]); // Close write end
+
+    auto output = co_await waitForCmdCompletion(pipefd[0]);
+    close(pipefd[0]);
+
+    // Wait for child process to exit
+    int status = -1;
+    waitpid(pid, &status, 0);
+
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (exitCode != 0)
+    {
+        lg2::error("Sync is failed, command[{CMD}] errorCode[{ERRCODE}] "
+                   "Output[{OUT}]", "CMD", cmd, "ERRCODE", exitCode, "OUT", output);
+    }
+    co_return std::make_pair(exitCode, output);
+}
+
+std::pair<pid_t, int> Manager::tryWithVFork(const std::string& cmd)
+{
+    int pipefd[2];
+    if (pipe(pipefd) == -1)
+    {
+        lg2::error("pipe failed: {ERR}", "ERR", strerror(errno));
+        //co_return false;
+        return std::make_pair(-1, -1);
+    }
+
+    pid_t pid = vfork();
+    if (pid == -1)
+    {
+        lg2::error("vfork failed: {ERR}", "ERR", strerror(errno));
+        close(pipefd[0]);
+        close(pipefd[1]);
+        //co_return false;
+        return std::make_pair(-1, -1);
+    }
+    else if (pid == 0)
+    {
+        // Child process
+        close(pipefd[0]); // Close read end
+
+        if (dup2(pipefd[1], STDOUT_FILENO) == -1 || dup2(pipefd[1], STDERR_FILENO) == -1)
+        {
+            // Minimal logging since we're in a vfork() child
+            _exit(EXIT_FAILURE);
+        }
+
+        close(pipefd[1]);
+
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), (char*)NULL);
+
+        // If execl fails
+        _exit(EXIT_FAILURE);
+    }
+
+    // Parent process
+    close(pipefd[1]); // Close write end
+
+#if 1
+
+    return std::make_pair(pid, pipefd[0]);
+
+#else
+    std::string output;
+    bool waitSuccess = true;
+
+    try
+    {
+        output = co_await waitForCmdCompletion(pipefd[0]);
+    }
+    catch (const std::exception& ex)
+    {
+        lg2::error("waitForCmdCompletion threw an exception: {ERR}", "ERR", ex.what());
+        waitSuccess = false;
+    }
+
+    close(pipefd[0]);
+
+    // Always wait for child
+    int status = -1;
+    if (waitpid(pid, &status, 0) == -1)
+    {
+        lg2::error("waitpid failed: {ERR}", "ERR", strerror(errno));
+        co_return false;
+    }
+
+    if (!waitSuccess)
+    {
+        co_return false;
+    }
+
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (exitCode != 0)
+    {
+        lg2::error("Command failed: [{CMD}] ExitCode[{EC}] Output[{OUT}]",
+                   "CMD", cmd, "EC", exitCode, "OUT", output);
+        co_return false;
+    }
+
+    co_return true;
+#endif
+}
+
+#if 0
+sdbusplus::async::task<std::pair<int, std::string>>
+    Manager::tryWithPosiSpawn(const std::string& cmd)
+{
+    int pipefd[2];
+    if (pipe(pipefd) == -1)
+    {
+        lg2::error("pipe failed");
+        co_return std::make_pair(-1, "");
+    }
+
+    posix_spawnattr_t attr;
+    bool attrInitialized = (posix_spawnattr_init(&attr) == 0);
+    bool usingSchedIdle = false;
+
+    if (attrInitialized)
+    {
+        short flags = POSIX_SPAWN_SETSCHEDPARAM | POSIX_SPAWN_SETSCHEDULER;
+        if (posix_spawnattr_setflags(&attr, flags) == 0)
+        {
+            struct sched_param sp{.sched_priority = 0};
+            if (posix_spawnattr_setschedpolicy(&attr, SCHED_IDLE) == 0 &&
+                posix_spawnattr_setschedparam(&attr, &sp) == 0)
+            {
+                usingSchedIdle = true;
+            }
+            else
+            {
+                lg2::info("SCHED_IDLE not usable, falling back to default policy.");
+            }
+        }
+    }
+
+    posix_spawn_file_actions_t fileActions;
+    posix_spawn_file_actions_init(&fileActions);
+    posix_spawn_file_actions_adddup2(&fileActions, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&fileActions, pipefd[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&fileActions, pipefd[0]);
+
+    pid_t pid;
+    const char* argv[] = {"/bin/sh", "-c", cmd.c_str(), nullptr};
+
+    int spawnResult = posix_spawn(&pid, "/bin/sh", &fileActions,
+                                  usingSchedIdle ? &attr : nullptr,
+                                  const_cast<char* const*>(argv), nullptr);
+
+    posix_spawn_file_actions_destroy(&fileActions);
+    if (attrInitialized)
+    {
+        posix_spawnattr_destroy(&attr);
+    }
+
+    close(pipefd[1]); // Close write end in parent
+
+    if (spawnResult != 0)
+    {
+        lg2::error("posix_spawn failed: {ERROR}", "ERROR", strerror(spawnResult));
+        close(pipefd[0]);
+        co_return std::make_pair(-1, "");
+    }
+
+    if (!usingSchedIdle)
+    {
+        // Try setting nice value after spawn if SCHED_IDLE wasn't used
+        if (setpriority(PRIO_PROCESS, pid, 19) != 0)
+        {
+            lg2::info("Unable to set nice value for PID {PID}: {ERR}",
+                      "PID", pid, "ERR", strerror(errno));
+        }
+    }
+
+    auto output = co_await waitForCmdCompletion(pipefd[0]);
+    close(pipefd[0]);
+
+    int status = -1;
+    waitpid(pid, &status, 0);
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+
+    if (exitCode != 0)
+    {
+        lg2::error("Sync failed. Command[{CMD}] Exit[{EXIT}] Output[{OUT}]",
+                   "CMD", cmd, "EXIT", exitCode, "OUT", output);
+    }
+
+    co_return std::make_pair(exitCode, output);
+}
+#else
+sdbusplus::async::task<std::pair<int, std::string>> Manager::tryWithPosiSpawn(const std::string& cmd)
+{
+    int pipefd[2];
+    if (pipe(pipefd) == -1)
+    {
+        lg2::error("pipe is failed");
+        co_return std::make_pair(-1, "");
+    }
+
+    posix_spawn_file_actions_t fileActions;
+    posix_spawn_file_actions_init(&fileActions);
+    posix_spawn_file_actions_adddup2(&fileActions, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_adddup2(&fileActions, pipefd[1], STDERR_FILENO);
+    posix_spawn_file_actions_addclose(&fileActions, pipefd[0]);
+
+    pid_t pid;
+    const char* argv[] = {"/bin/sh", "-c", cmd.c_str(), nullptr};
+
+    int spawnResult = posix_spawn(&pid, "/bin/sh", &fileActions, nullptr,
+                                  const_cast<char* const*>(argv), nullptr);
+
+    posix_spawn_file_actions_destroy(&fileActions);
+    close(pipefd[1]); // Close write end in parent
+
+    if (spawnResult != 0)
+    {
+        lg2::error("posix_spawn failed: {ERROR}", "ERROR", strerror(spawnResult));
+        close(pipefd[0]);
+        co_return std::make_pair(-1, "");
+    }
+
+    auto output = co_await waitForCmdCompletion(pipefd[0]);
+    close(pipefd[0]);
+
+    // Wait for child process to exit
+    int status = -1;
+    waitpid(pid, &status, 0);
+
+    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (exitCode != 0)
+    {
+        lg2::error("Sync is failed, command[{CMD}] errorCode[{ERRCODE}] "
+                   "Output[{OUT}]", "CMD", cmd, "ERRCODE", exitCode, "OUT", output);
+    }
+
+    co_return std::make_pair(exitCode, output);
+}
+#endif
+
+std::string getVanishedSrcPath(const std::string& rsyncCmdOut)
+{
+    const std::string vanishPattern = "file has vanished: \"";
+    std::string vanishSrcs;
+    size_t searchPos = 0;
+
+    while ((searchPos = rsyncCmdOut.find(vanishPattern, searchPos)) != std::string::npos)
+    {
+        searchPos += vanishPattern.size();
+        size_t endQuote = rsyncCmdOut.find('"', searchPos);
+        if (endQuote == std::string::npos)
+            break;
+
+        vanishSrcs += rsyncCmdOut.substr(searchPos, endQuote - searchPos) + " ";
+        searchPos = endQuote + 1;
+    }
+
+    return vanishSrcs;
+}
+
+sdbusplus::async::task<std::pair<int, std::string>> Manager::executeCmd(const std::string& syncCmd)
+{
+    std::pair<int, std::string> ret;
+    if (tryWith("system"))
+    {
+        ret = tryWithSystem(syncCmd);
+    }
+    else if (tryWith("popen"))
+    {
+        ret = tryWithPopen(syncCmd);
+    }
+    else if (tryWith("popen_nonblock"))
+    {
+        ret = co_await tryWithPopenNonBlock(syncCmd);
+    }
+    else if (tryWith("fork"))
+    {
+        ret = co_await tryWithFork(syncCmd);
+    }
+    else if (tryWith("vfork"))
+    {
+        //co_return co_await tryWithVFork(syncCmd);
+        auto result = tryWithVFork(syncCmd);
+        if (result.first == -1 && result.second == -1)
+        {
+            ret = std::make_pair(-1, "");
+        }
+        else
+        {
+            std::string output;
+            bool waitSuccess = true;
+
+            try
+            {
+                output = co_await waitForCmdCompletion(result.second);
+            }
+            catch (const std::exception& ex)
+            {
+                lg2::error("waitForCmdCompletion threw an exception: {ERR}", "ERR", ex.what());
+                waitSuccess = false;
+            }
+
+            close(result.second);
+
+            // Always wait for child
+            int status = -1;
+            if (waitpid(result.first, &status, 0) == -1)
+            {
+                lg2::error("waitpid failed: {ERR}", "ERR", strerror(errno));
+                ret = std::make_pair(-1, output);
+            }
+            else
+            {
+                if (!waitSuccess)
+                {
+                    ret = std::make_pair(-1, output);
+                }
+                else
+                {
+                    int exitCode = WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+                    if (exitCode != 0)
+                    {
+                        lg2::error("Sync is failed, [{CMD}] ExitCode[{EC}] Output[{OUT}]",
+                                "CMD", syncCmd, "EC", exitCode, "OUT", output);
+                    }
+                    ret = std::make_pair(exitCode, output);
+                }
+            }
+        }
+    }
+    else if (tryWith("posix_spawn"))
+    {
+        ret = co_await tryWithPosiSpawn(syncCmd);
+    }
+    else
+    {
+        lg2::error("No system call mentioned");
+        ret = std::make_pair(-1, "");
+    }
+
+    co_return ret;
 }
 
 // TODO: This isn't truly an async operation — Need to use popen/posix_spawn to
@@ -315,48 +836,141 @@ void Manager::getRsyncCmd(const std::string& src, const std::string& dest, std::
 // concurrent sync changes.
 sdbusplus::async::task<bool>
     // NOLINTNEXTLINE
-    Manager::syncData(const config::DataSyncConfig& dataSyncCfg)
+    Manager::syncData(const config::DataSyncConfig& dataSyncCfg,
+                      const std::string srcPath,
+                      const std::string destPath)
 {
-    std::string syncCmd{};
-    getRsyncCmd(dataSyncCfg._path,
-        dataSyncCfg._destPath.value_or(dataSyncCfg._path), syncCmd, 0);
-
-    lg2::debug("Rsync command: {CMD}", "CMD", syncCmd);
-    int result = std::system(syncCmd.c_str()); // NOLINT
-    if (result != 0)
+    using namespace std::string_literals;
+    //std::string syncCmd{
+    //    "rsync --archive --compress --delete --delete-missing-args --relative --atimes --update"};
+    std::string syncCmd;
+    if (fs::exists("/tmp/pds/rsync_opts"))
     {
-        // TODOs:
-        // 1. Retry based on rsync error code
-        // 2. Create error log and Disable redundancy if retry fails
-        // 3. Perform a callout
-
-        // NOTE: The following line is commented out as part of a temporary
-        // workaround. We are forcing Full Sync to succeed even if data syncing
-        // fails. This change should be reverted once proper error handling is
-        // implemented.
-        // setSyncEventsHealth(SyncEventsHealth::Critical);
-
-        lg2::error("Error syncing: {PATH}", "PATH", dataSyncCfg._path);
-
-        co_return false;
+        std::ifstream file("/tmp/pds/rsync_opts");
+        if (file)
+        {
+            std::string rsyncCliOpts((std::istreambuf_iterator<char>(file)),
+                    std::istreambuf_iterator<char>());
+            rsyncCliOpts.pop_back();
+            syncCmd = rsyncCliOpts;
+        }
     }
-    else if(dataSyncCfg._notifySibling.has_value())
+    else
     {
-        // TODO: can't rely only on exit code. change to popen and read stdout
-        // also to confirm whether data got really updated.
-        lg2::info("Triggers Sibling Notification");
+        syncCmd = "rsync --archive --compress --delete --delete-missing-args --relative --atimes --update";
+    }
 
-        // Second argument is modified file path.
-        notify::NotifySibling notifySibling(dataSyncCfg, dataSyncCfg._path);
+    if (srcPath.empty() && dataSyncCfg._excludeList.has_value())
+    {
+        std::string excludeStr =  frameExcludeString(dataSyncCfg._path,
+                                            dataSyncCfg._excludeList.value());
+        syncCmd.append(excludeStr);
+    }
+
+    // Add source data path
+    std::string syncedSrcPath;
+
+    if (!srcPath.empty())
+    {
+        syncCmd.append(" "s + srcPath);
+        syncedSrcPath = srcPath; 
+    }
+    else
+    {
+        if (dataSyncCfg._includeList.has_value())
+        {
+            std::string srcPaths;
+            for (auto& path : dataSyncCfg._includeList.value())
+            {
+                srcPaths += " " + path.string();
+            }
+            lg2::debug("Included Paths: {INC_PATHS} for [{PATH}]", "INC_PATHS", srcPaths, "PATH",
+                    dataSyncCfg._path);
+            syncCmd.append(srcPaths);
+            syncedSrcPath = srcPaths; 
+        }
+        else
+        {
+            syncCmd.append(" "s + dataSyncCfg._path.string());
+            syncedSrcPath = dataSyncCfg._path.string();
+        }
+    }
+
+#ifdef UNIT_TEST
+    syncCmd.append(" "s);
+#else
+    static const std::string rsyncdURL(std::format(" rsync://localhost:{}/{}",
+            (_extDataIfaces->siblingBmcPos() == 0 ? BMC0_RSYNC_PORT
+                                                  : BMC1_RSYNC_PORT),
+            RSYNCD_MODULE_NAME));
+    syncCmd.append(rsyncdURL);
+#endif
+
+    // Add destination data path
+    if (!destPath.empty())
+    {
+        syncCmd.append(destPath);
+    }
+    else
+    {
+        //syncCmd.append(dataSyncCfg._destPath.value_or(dataSyncCfg._path).string());
+        syncCmd.append(dataSyncCfg._destPath.value_or(fs::path("")).string());
+    }
+
+    lg2::debug("Sync command: {CMD}", "CMD", syncCmd);
+
+    auto syncStartTime = std::chrono::steady_clock::now();
+
+    auto ret = co_await executeCmd(syncCmd);
+
+    auto syncEndTime = std::chrono::steady_clock::now();
+    auto syncElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(
+            syncEndTime - syncStartTime);
+    lg2::debug("Elapsed time for sync: [{DURATION_SECONDS}] seconds for {CMD}",
+              "DURATION_SECONDS", syncElapsedTime.count(), "CMD", syncCmd);
+
+    if (ret.first != 0)
+    {
+        // TODO Retry
+        // For now, just handle below rsync error codes
+        // "24 - Partial transfer due to vanished source files"
+        if (ret.first == 24)
+        {
+            auto vanishedSrcs = getVanishedSrcPath(ret.second);
+            lg2::warning("Retry Sync with vanished paths: [{VANISHED_SRCS}]",
+                       "VANISHED_SRCS", vanishedSrcs);
+            co_return co_await syncData(dataSyncCfg, vanishedSrcs, destPath);
+        }
+    }
+
+    if( (ret.first == 0) && (dataSyncCfg._notifySibling.has_value()))
+    {
+        notify::NotifySibling notifySibling(dataSyncCfg, syncedSrcPath);
 
         std::string notifyCmd{};
         getRsyncCmd(notifySibling.getNotifyFilePath().string(),
                         NOTIFY_SERVICE_DIR, notifyCmd, 1);
-        lg2::debug("Rsync notify cmd : {CMD}", "CMD", notifyCmd);
+        lg2::debug("Sync notify cmd : {CMD}", "CMD", notifyCmd);
 
-        [[maybe_unused]] int notifyResult = std::system(notifyCmd.c_str());
+        auto notifyStartTime = std::chrono::steady_clock::now();
+
+        ret = co_await executeCmd(notifyCmd);
+        
+        auto notifyEndTime = std::chrono::steady_clock::now();
+        auto notifyElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(
+                notifyEndTime - notifyStartTime);
+        lg2::debug("Elapsed time for notify: [{DURATION_SECONDS}] seconds for {CMD}",
+                "DURATION_SECONDS", notifyElapsedTime.count(), "CMD", notifyCmd);
+
+        if (ret.first != 0)
+        {
+            lg2::warning("Failed to notify sibling for syncCmd[{SYNC_CMD}] "
+                         "notifyCmd[{NOTIFY_CMD}]", "SYNC_CMD", syncCmd,
+                         "NOTIFY_CMD", notifyCmd);
+        }
     }
-    co_return true;
+
+    co_return ret.first == 0 ? true : false;
 }
 
 sdbusplus::async::task<bool>
@@ -384,6 +998,8 @@ sdbusplus::async::task<>
             _ctx, IN_NONBLOCK, eventMasksToWatch, dataSyncCfg._path,
             dataSyncCfg._includeList, dataSyncCfg._excludeList);
 
+        _noOfWatchers += dataWatcher.noOfWatch();
+
         while (!_ctx.stop_requested() && !_syncBMCDataIface.disable_sync())
         {
             if (auto dataOperations = co_await dataWatcher.onDataChange();
@@ -399,19 +1015,15 @@ sdbusplus::async::task<>
                 }
                 for ([[maybe_unused]] const auto& dataOp : dataOperations)
                 {
-                    if (dataSyncCfg._stateDrivenSync.has_value())
+
+                    if ((dataSyncCfg._stateDrivenSync.has_value()) &&
+                        (dataSyncCfg._stateDrivenSync.value()._suspendSync))
                     {
-                        const auto& stateSync =
-                            dataSyncCfg._stateDrivenSync.value();
-                        if (!stateSync._suspendSync)
-                        {
-                            co_await syncData(dataSyncCfg);
-                        }
+                        // Ignore sync events since its suspend to sync
+                        continue;
                     }
-                    else
-                    {
-                        co_await syncData(dataSyncCfg);
-                    }
+                    _ctx.spawn(syncData(dataSyncCfg, dataOp.first.string()) |
+                               stdexec::then([] ([[maybe_unused]] bool result) {}));
                 }
             }
         }
@@ -443,18 +1055,18 @@ sdbusplus::async::task<>
         {
             break;
         }
-        if (dataSyncCfg._stateDrivenSync.has_value())
+        
+        if ((dataSyncCfg._stateDrivenSync.has_value()) &&
+            (dataSyncCfg._stateDrivenSync.value()._suspendSync))
         {
-            const auto& stateSync = dataSyncCfg._stateDrivenSync.value();
-            if (!stateSync._suspendSync)
-            {
-                co_await syncData(dataSyncCfg);
-            }
+            // Ignore since its suspend to sync
+            continue;
         }
-        else
-        {
-            co_await syncData(dataSyncCfg);
-        }
+
+        lg2::debug("Periodic timer [{INTERVAL}s] is expired for {PATH}",
+                   "INTERVAL", dataSyncCfg._periodicityInSec.value().count(),
+                   "PATH", dataSyncCfg._path);
+        co_await syncData(dataSyncCfg);
     }
     co_return;
 }
@@ -481,61 +1093,130 @@ sdbusplus::async::task<void> Manager::startFullSync()
 
     auto fullSyncStartTime = std::chrono::steady_clock::now();
 
-    auto syncResults = std::vector<bool>();
-    size_t spawnedTasks = 0;
-
-    for (const auto& cfg : _dataSyncConfiguration)
+    if (tryWith("full_sync_single_rsync"))
     {
-        // TODO: add receiver logic to stop fullsync when disable sync is set to
-        // true.
-        if (isSyncEligible(cfg))
+        using namespace std::string_literals;
+        std::string srcPaths;
+        std::string excludePaths;
+        for (const auto& cfg : _dataSyncConfiguration)
         {
-            _ctx.spawn(
-                syncData(cfg) |
-                stdexec::then([&syncResults, &spawnedTasks](bool result) {
-                syncResults.push_back(result);
-                spawnedTasks--; // Decrement the number of spawned tasks
-            }));
-            spawnedTasks++;     // Increment the number of spawned tasks
+            if (!isSyncEligible(cfg))
+            {
+                continue;
+            }
+
+            if (cfg._includeList.has_value())
+            {
+                std::string includePaths;
+                for (auto& path : cfg._includeList.value())
+                {
+                    includePaths += " " + path.string();
+                }
+                lg2::debug("Included Paths: {INC_PATHS} for [{PATH}]", "INC_PATHS", includePaths, "PATH",
+                           cfg._path);
+                srcPaths += includePaths;
+            }
+            else
+            {
+                srcPaths += " " + cfg._path.string();
+            }
+
+            if (cfg._excludeList.has_value())
+            {
+                excludePaths += frameExcludeString(cfg._path, cfg._excludeList.value());
+            }
         }
-    }
 
-    while (spawnedTasks > 0)
-    {
-        co_await sdbusplus::async::sleep_for(_ctx,
-                                             std::chrono::milliseconds(50));
-    }
+        std::string sPaths(excludePaths);
+        if (tryWith("files-from_opt"))
+        {
+            sPaths = " --recursive --files-from=/etc/phosphor-data-sync/rsync_paths.lsv /";
+        }
+        else
+        {
+            sPaths = excludePaths + " " + srcPaths;
+        }
 
-    auto fullSyncEndTime = std::chrono::steady_clock::now();
-    auto FullsyncElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(
-        fullSyncEndTime - fullSyncStartTime);
+        fullSyncStartTime = std::chrono::steady_clock::now();
+        auto ret  = co_await syncData(*(_dataSyncConfiguration.begin()), sPaths,
+                "/var/lib/phosphor-data-sync/bmc_data_bkp/");
+        if (ret)
+        {
+            _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncCompleted);
+            setSyncEventsHealth(SyncEventsHealth::Ok);
+            lg2::info("Full Sync completed successfully");
+        }
+        else
+        {
+            lg2::error("Full Sync is failed");
+            _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncFailed);
+        }
 
-    // If any sync operation fails, the FullSync will be considered failed;
-    // otherwise, it will be marked as completed.
-    if (std::ranges::all_of(syncResults,
-                            [](const auto& result) { return result; }))
-    {
-        _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncCompleted);
-        setSyncEventsHealth(SyncEventsHealth::Ok);
-        lg2::info("Full Sync completed successfully");
+        auto fullSyncEndTime = std::chrono::steady_clock::now();
+        auto FullsyncElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(
+                fullSyncEndTime - fullSyncStartTime);
+
+        // total duration/time diff of the Full Sync operation
+        lg2::info("Elapsed time for full sync: [{DURATION_SECONDS}] seconds",
+                "DURATION_SECONDS", FullsyncElapsedTime.count());
     }
     else
     {
-        // Forcefully marking full sync as successful, even if data syncing
-        // fails.
-        // TODO: Revert this workaround once the proper logic is implemented
-        _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncCompleted);
-        setSyncEventsHealth(SyncEventsHealth::Ok);
-        lg2::info("Full Sync passed temporarily despite sync failures");
+        auto syncResults = std::vector<bool>();
+        size_t spawnedTasks = 0;
 
-        // _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncFailed);
-        // lg2::info("Full Sync failed");
+        for (const auto& cfg : _dataSyncConfiguration)
+        {
+            // TODO: add receiver logic to stop fullsync when disable sync is set to
+            // true.
+            if (isSyncEligible(cfg))
+            {
+                _ctx.spawn(
+                        syncData(cfg) |
+                        stdexec::then([&syncResults, &spawnedTasks](bool result) {
+                            syncResults.push_back(result);
+                            spawnedTasks--; // Decrement the number of spawned tasks
+                            }));
+                spawnedTasks++;     // Increment the number of spawned tasks
+            }
+        }
+
+        while (spawnedTasks > 0)
+        {
+            co_await sdbusplus::async::sleep_for(_ctx,
+                    std::chrono::milliseconds(50));
+        }
+
+        auto fullSyncEndTime = std::chrono::steady_clock::now();
+        auto FullsyncElapsedTime = std::chrono::duration_cast<std::chrono::seconds>(
+                fullSyncEndTime - fullSyncStartTime);
+
+        // If any sync operation fails, the FullSync will be considered failed;
+        // otherwise, it will be marked as completed.
+        if (std::ranges::all_of(syncResults,
+                    [](const auto& result) { return result; }))
+        {
+            _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncCompleted);
+            setSyncEventsHealth(SyncEventsHealth::Ok);
+            lg2::info("Full Sync completed successfully");
+        }
+        else
+        {
+            // Forcefully marking full sync as successful, even if data syncing
+            // fails.
+            // TODO: Revert this workaround once the proper logic is implemented
+            //_syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncCompleted);
+            //setSyncEventsHealth(SyncEventsHealth::Ok);
+            //lg2::info("Full Sync passed temporarily despite sync failures");
+
+            _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncFailed);
+            lg2::info("Full Sync failed");
+        }
+
+        // total duration/time diff of the Full Sync operation
+        lg2::info("Elapsed time for full sync: [{DURATION_SECONDS}] seconds",
+                "DURATION_SECONDS", FullsyncElapsedTime.count());
     }
-
-    // total duration/time diff of the Full Sync operation
-    lg2::info("Elapsed time for full sync: [{DURATION_SECONDS}] seconds",
-              "DURATION_SECONDS", FullsyncElapsedTime.count());
-
     co_return;
 }
 

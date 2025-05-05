@@ -19,7 +19,7 @@ fs::path writeToFile(const auto& jsonData)
     // TODO : generate unique across machine
     fs::path notifyFilePath = NOTIFY_SIBLING_DIR / fs::path("notify_" +
                                 std::to_string(std::time(nullptr)) + ".json");
-    lg2::info("Notify file path : {PATH}", "PATH", notifyFilePath);
+    lg2::debug("Notify file path : {PATH}", "PATH", notifyFilePath);
 
     std::ofstream notifyFile(notifyFilePath);
     if (!notifyFile)
@@ -46,8 +46,9 @@ NotifySibling::NotifySibling(const config::DataSyncConfig& dataSyncConfig, const
     }
     catch (std::exception& e)
     {
-        lg2::error("Failed to create sibling notification for {DATA}", "DATA",
-        dataSyncConfig._path);
+        lg2::error("Failed to create sibling notification for {DATA} "
+                   "EXCEPTION: {EXCEPTION}", "DATA",
+        dataSyncConfig._path, "EXCEPTION", e);
     }
 }
 
@@ -60,10 +61,11 @@ nlohmann::json NotifySibling::frameNotifyInfo(const config::DataSyncConfig&
             dataSyncConfig, const fs::path modifiedDataPath)
 {
     nlohmann::json notifyInfoJson = nlohmann::json::object({
-        //{"configuredDataPath", dataSyncConfig._path},
         {"ModifiedDataPath", modifiedDataPath},
         {"NotifyInfo", dataSyncConfig._notifySibling.value()}
     });
+    lg2::debug("Notify sibling service: {SERVICE}", "SERVICE",
+               notifyInfoJson["NotifyInfo"]["NotifyServices"]);
     
     return notifyInfoJson;
 }
