@@ -14,6 +14,7 @@ rbmc_data_sync_sources = [
         'manager.cpp',
         'notify_sibling.cpp',
         'notify_service.cpp',
+        'state_driven_sync.cpp',
         'sync_bmc_data_ifaces.cpp',
     ),
 ]
