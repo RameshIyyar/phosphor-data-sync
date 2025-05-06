@@ -185,13 +185,18 @@ std::optional<std::vector<EventInfo>> DataWatcher::readEvents()
         // NOLINTNEXTLINE to avoid cppcoreguidelines-pro-type-reinterpret-cast
         auto* receivedEvent = reinterpret_cast<inotify_event*>(&buffer[offset]);
 
-        lg2::debug("receivedEvent->name : {NAME}", "NAME", receivedEvent->name);
-        lg2::debug("receivedEvent->mask : {MASK}({NAME})", "MASK",
-            receivedEvent->mask, "NAME", eventName(receivedEvent->mask));
-        lg2::debug("receivedEvent->cookie : {COOKIE}", "COOKIE",
-        receivedEvent->cookie);
-        receivedEvents.emplace_back(receivedEvent->wd, receivedEvent->name,
+        if ((receivedEvent->mask & _eventMasksToWatch) ||
+            (receivedEvent->mask & _eventMasksIfNotExists))
+        {
+            receivedEvents.emplace_back(receivedEvent->wd, receivedEvent->name,
                                     receivedEvent->mask);
+        }
+        else
+        {
+            lg2::debug("Skipping the uninterested event : {NAME} for the "
+            "configured path : {PATH}", "NAME", eventName(receivedEvent->mask),
+            "PATH", _dataPathToWatch);
+        }
 
         offset += offsetof(inotify_event, name) + receivedEvent->len;
     }
@@ -217,11 +222,11 @@ std::optional<DataOperation>
     fs::path eventReceivedFor =
         _watchDescriptors.at(std::get<WD>(receivedEventInfo)) /
         std::get<BaseName>(receivedEventInfo);
+
     if (fs::is_directory(eventReceivedFor))
     {
         eventReceivedFor /= "";
     }
-
     if (_excludeList.has_value())
     {
         // Skip the events received for the paths which are in excluded list.
