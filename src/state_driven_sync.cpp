@@ -339,7 +339,7 @@ sdbusplus::async::task<std::string>
 
 sdbusplus::async::task<>
     // NOLINTNEXTLINE
-    StateDrivenSync::watchBmcPropertiesChanged(const std::string& Interface)
+    StateDrivenSync::watchBmcPropertiesChanged(const std::string Interface)
 {
     auto itGroup = _manager.watcherLists.find(Interface);
     auto& dataSyncCfgs = itGroup->second;

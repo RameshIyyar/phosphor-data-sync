@@ -75,7 +75,7 @@ class StateDrivenSync
      *
      */
     sdbusplus::async::task<>
-        watchBmcPropertiesChanged(const std::string& interface);
+        watchBmcPropertiesChanged(const std::string interface);
 
     /**
      * @brief Constructs a D-Bus match rule for PropertiesChanged signal
