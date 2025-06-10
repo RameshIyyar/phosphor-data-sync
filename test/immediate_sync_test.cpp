@@ -28,6 +28,7 @@ TEST_F(ManagerTest, testDataChangeInFile)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -118,6 +119,7 @@ TEST_F(ManagerTest, testDataDeleteInDir)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -215,6 +217,7 @@ TEST_F(ManagerTest, testDataDeletePathFile)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -319,6 +322,7 @@ TEST_F(ManagerTest, testDataChangeWhenSyncIsDisabled)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -422,6 +426,7 @@ TEST_F(ManagerTest, testDataCreateInSubDir)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -512,6 +517,7 @@ TEST_F(ManagerTest, testFileMoveToAnotherDir)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 
@@ -643,6 +649,7 @@ TEST_F(ManagerTest, testExcludeFile)
         // NOLINTNEXTLINE
         .WillByDefault([&mockExtDataIfaces]() -> sdbusplus::async::task<> {
         mockExtDataIfaces->setBMCRole(extData::BMCRole::Active);
+        mockExtDataIfaces->setBMCRedundancy(true);
         co_return;
     });
 

@@ -44,16 +44,17 @@ sdbusplus::async::task<> Manager::init()
         co_return;
     }
 
-    // TODO: Explore the possibility of running FullSync and Background Sync
-    // concurrently
     if (_extDataIfaces->bmcRedundancy())
     {
+        // TODO: Explore the possibility of running FullSync and Background Sync
+        //       concurrently
         // NOLINTNEXTLINE
         co_await startFullSync();
+        // NOLINTNEXTLINE
+        co_await startSyncEvents();
     }
 
-    // NOLINTNEXTLINE
-    co_return co_await startSyncEvents();
+    co_return;
 }
 
 // NOLINTNEXTLINE
