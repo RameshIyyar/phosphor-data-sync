@@ -10,7 +10,7 @@ sdbusplus::async::task<> ExternalDataIFaces::startExtDataFetches()
 {
     // NOLINTNEXTLINE
     co_return co_await sdbusplus::async::execution::when_all(
-        fetchBMCRedundancyMgrProps(), fetchSiblingBmcPos());
+        fetchBMCRedundancyMgrProps(), fetchBMCPosition());
 }
 
 BMCRole ExternalDataIFaces::bmcRole() const
@@ -33,14 +33,14 @@ void ExternalDataIFaces::bmcRedundancy(const BMCRedundancy& bmcRedundancy)
     _bmcRedundancy = bmcRedundancy;
 }
 
-const SiblingBmcPos& ExternalDataIFaces::siblingBmcPos() const
+const BMCPosition& ExternalDataIFaces::bmcPosition() const
 {
-    return _siblingBmcPos;
+    return _bmcPosition;
 }
 
-void ExternalDataIFaces::siblingBmcPos(const SiblingBmcPos& siblingBmcPos)
+void ExternalDataIFaces::bmcPosition(const BMCPosition& bmcPosition)
 {
-    _siblingBmcPos = siblingBmcPos;
+    _bmcPosition = bmcPosition;
 }
 
 } // namespace data_sync::ext_data

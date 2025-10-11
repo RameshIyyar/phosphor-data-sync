@@ -31,7 +31,7 @@ TEST_F(ManagerTest, testDataChangeInFile)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -112,7 +112,7 @@ TEST_F(ManagerTest, testDataDeleteInDir)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -198,7 +198,7 @@ TEST_F(ManagerTest, testDataDeletePathFile)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -290,7 +290,7 @@ TEST_F(ManagerTest, testDataChangeWhenSyncIsDisabled)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -382,7 +382,7 @@ TEST_F(ManagerTest, testDataCreateInSubDir)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -455,7 +455,7 @@ TEST_F(ManagerTest, testFileMoveToAnotherDir)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -567,7 +567,7 @@ TEST_F(ManagerTest, testExcludeFile)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 

@@ -11,7 +11,7 @@ namespace data_sync::ext_data
 using RBMC = sdbusplus::common::xyz::openbmc_project::state::bmc::Redundancy;
 using BMCRole = RBMC::Role;
 using BMCRedundancy = bool;
-using SiblingBmcPos = size_t;
+using BMCPosition = size_t;
 
 /**
  * @class ExternalDataIFaces
@@ -55,11 +55,11 @@ class ExternalDataIFaces
     BMCRedundancy bmcRedundancy() const;
 
     /**
-     * @brief Used to obtain the Sibling BMC Position.
+     * @brief Used to obtain the BMC Position.
      *
-     * @return The Sibling BMC Position
+     * @return The BMC Position
      */
-    const SiblingBmcPos& siblingBmcPos() const;
+    const BMCPosition& bmcPosition() const;
 
   protected:
     /**
@@ -68,9 +68,9 @@ class ExternalDataIFaces
     virtual sdbusplus::async::task<> fetchBMCRedundancyMgrProps() = 0;
 
     /**
-     * @brief Used to retrieve the Sibling BMC Position.
+     * @brief Used to retrieve the BMC Position.
      */
-    virtual sdbusplus::async::task<> fetchSiblingBmcPos() = 0;
+    virtual sdbusplus::async::task<> fetchBMCPosition() = 0;
 
     /**
      * @brief A utility API to assign the retrieved BMC role.
@@ -91,13 +91,13 @@ class ExternalDataIFaces
     void bmcRedundancy(const BMCRedundancy& bmcRedundancy);
 
     /**
-     * @brief A utility API to assign the retrieved Sibling BMC Position.
+     * @brief A utility API to assign the retrieved BMC Position.
      *
-     * @param[in] siblingBmcPos - The retrieved Sibling BMC Position.
+     * @param[in] bmcPosition - The retrieved BMC Position.
      *
      * @return None.
      */
-    void siblingBmcPos(const SiblingBmcPos& siblingBmcPos);
+    void bmcPosition(const BMCPosition& bmcPosition);
 
   private:
     /**
@@ -111,9 +111,9 @@ class ExternalDataIFaces
     BMCRedundancy _bmcRedundancy{false};
 
     /**
-     * @brief hold the Sibling BMC Position
+     * @brief hold the BMC Position
      */
-    SiblingBmcPos _siblingBmcPos;
+    BMCPosition _bmcPosition;
 };
 
 } // namespace data_sync::ext_data

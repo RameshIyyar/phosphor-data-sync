@@ -56,7 +56,7 @@ TEST_F(ManagerTest, ParseDataSyncCfg)
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
@@ -96,7 +96,7 @@ TEST_F(ManagerTest, testDBusDataPersistency)
         co_return;
     });
 
-    EXPECT_CALL(*mockExtDataIfaces, fetchSiblingBmcPos())
+    EXPECT_CALL(*mockExtDataIfaces, fetchBMCPosition())
         // NOLINTNEXTLINE
         .WillRepeatedly([]() -> sdbusplus::async::task<> { co_return; });
 
