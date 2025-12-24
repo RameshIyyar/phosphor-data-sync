@@ -10,6 +10,7 @@ namespace data_sync::ext_data
 
 using RBMC = sdbusplus::common::xyz::openbmc_project::state::bmc::Redundancy;
 using BMCRole = RBMC::Role;
+using SiblingReadyToSync = RBMC::ReadyToSync;
 using BMCRedundancy = bool;
 using BMCPosition = size_t;
 
@@ -60,6 +61,41 @@ class ExternalDataIFaces
      * @return The BMC Position
      */
     const BMCPosition& bmcPosition() const;
+
+    /**
+     * @brief Used to start the sync service (rsync and stunnel).
+     *
+     * The rsync service will take care to start stunnel service.
+     *
+     * @return True if the sync service started successfully otherwise false.
+     */
+    virtual sdbusplus::async::task<bool> startSyncService() = 0;
+
+    /**
+     * @brief Used to wait for sync service (rsync and stunnel) to start.
+     *
+     * The rsync service will wait for the stunnel service to start as well.
+     *
+     * @param[in] path - The service object path to check state
+     *
+     * @return True if the sync service started successfully otherwise false.
+     */
+    virtual sdbusplus::async::task<bool> waitForSyncService(const sdbusplus::message::object_path& path = sdbusplus::message::object_path()) = 0;
+
+    /**
+     * @brief Check for BMC redundancy to be enabled and start sync service.
+     *
+     * The BMC role will be updated if its changed.
+     */
+    virtual sdbusplus::async::task<> checkBMCRedundancyAndStartSyncServ() = 0;
+
+    /**
+     * @brief Used to wait for the sibling BMC to get ready to initiate sync
+     *        operation.
+     *
+     * @return True if the sibling BMC is ready to sync otherwise false.
+     */
+    virtual sdbusplus::async::task<bool> waitForSiblingBMCReadyTosync() = 0;
 
   protected:
     /**

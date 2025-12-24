@@ -3,7 +3,6 @@ Description=Stunnel for Redundant BMC Data Synchronization
 PartOf=SyncBMCData_rsync.service
 
 [Service]
-ExecStartPre=/usr/libexec/phosphor-data-sync/gen_certs.sh
 ExecStartPre=/usr/libexec/phosphor-data-sync/update_sibling_bmc_ip.sh
 ExecStart=/usr/bin/sh -c "/usr/bin/stunnel /etc/phosphor-data-sync/stunnel/bmc$(fw_printenv -n bmc_position)_stunnel.conf"
 Restart=always

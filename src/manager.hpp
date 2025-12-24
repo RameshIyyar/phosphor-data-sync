@@ -68,8 +68,9 @@ class Manager
      *          synchronization process between two BMCs.
      *        - The sync process is handled asynchronously.
      *
+     * @param[in] waitForSyncServ - Wait for sync service to start full sync
      */
-    sdbusplus::async::task<> startFullSync();
+    sdbusplus::async::task<> startFullSync(bool waitForSyncServ = false);
 
     /**
      * @brief Helper API that retrieves the sibling BMC availability
@@ -158,8 +159,10 @@ class Manager
      *          synchronization.
      *        - A timer event for all configured files that require periodic
      *          synchronization.
+     *
+     * @param[in] waitForSyncServ - Wait for sync service to start sync events
      */
-    sdbusplus::async::task<> startSyncEvents();
+    sdbusplus::async::task<> startSyncEvents(bool waitForSyncServ = false);
 
     /**
      * @brief A helper rsync wrapper API that syncs data to sibling

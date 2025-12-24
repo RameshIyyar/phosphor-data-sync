@@ -10,9 +10,17 @@
 
 set -e
 
+if [ $# -ne 1 ] ; then
+    echo "Usage: $(basename $0) <path_to_store_generated_files>"
+    exit 1
+fi
+
+# Argument
+PATH_TO_STORE="$1"
+
 # Config
-CA_DIR=/etc/phosphor-data-sync/certs
-CERTS_DIR=/etc/phosphor-data-sync/certs
+CA_DIR="$PATH_TO_STORE"
+CERTS_DIR="$PATH_TO_STORE"
 DAYS_VALID=365
 
 rm -rf $CA_DIR $CERTS_DIR

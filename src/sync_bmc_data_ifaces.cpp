@@ -85,7 +85,7 @@ sdbusplus::async::task<>
             FullSyncInProgress();
     }
 
-    co_return _ctx.spawn(_manager.startFullSync());
+    co_return _ctx.spawn(_manager.startFullSync(true));
 }
 
 bool SyncBMCDataIface::set_property([[maybe_unused]] disable_sync_t type,

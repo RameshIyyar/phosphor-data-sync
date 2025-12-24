@@ -38,17 +38,37 @@ sdbusplus::async::task<> Manager::init()
     if (_syncBMCDataIface.disable_sync())
     {
         lg2::info(
-            "Sync is Disabled, data sync cannot be performed to the sibling BMC.");
-        co_return;
+            "Sync is disabled, data sync cannot be performed to the sibling BMC.");
+    }
+    else if (_extDataIfaces->bmcRedundancy())
+    {
+        auto [localBMCReadyToSync, siblingBMCReadyToSync] =
+            co_await sdbusplus::async::execution::when_all(
+                    _extDataIfaces->startSyncService(),
+                    _extDataIfaces->waitForSiblingBMCReadyTosync());
+        if (localBMCReadyToSync && siblingBMCReadyToSync)
+        {
+            co_await sdbusplus::async::execution::when_all(startFullSync(),
+                    startSyncEvents());
+        }
+    }
+    else
+    {
+        lg2::info("BMC redundancy is disabled, wait for to start sync service");
     }
 
-    if (_extDataIfaces->bmcRedundancy())
-    {
-        // TODO: Explore the possibility of running FullSync and Background Sync
-        //       concurrently
-        co_await startFullSync();
-        co_await startSyncEvents();
-    }
+    /**
+     * - The Rsync and Stunnel services are started dynamically when BMC
+     *   redundancy becomes enabled. This can occur in scenarios such as
+     *   a sibling BMC being added later, becoming available later, or
+     *   being replaced (handle sibling BMC IP changes).
+     *
+     * - The RBMC manager is responsible for initiating both background and full
+     *   sync operations once redundancy is enabled.
+     *   However, data synchronization (both background and full) is deferred
+     *   until the Rsync and Stunnel services are fully up and running.
+     */
+     _ctx.spawn(_extDataIfaces->checkBMCRedundancyAndStartSyncServ());
 
     co_return;
 }
@@ -126,8 +146,23 @@ bool Manager::isSyncEligible(const config::DataSyncConfig& dataSyncCfg)
 }
 
 // NOLINTNEXTLINE
-sdbusplus::async::task<> Manager::startSyncEvents()
+sdbusplus::async::task<> Manager::startSyncEvents(bool waitForSyncServ)
 {
+    if (waitForSyncServ)
+    {
+        auto [localBMCReadyToSync, siblingBMCReadyToSync] =
+            co_await sdbusplus::async::execution::when_all(
+                    _extDataIfaces->waitForSyncService(),
+                    _extDataIfaces->waitForSiblingBMCReadyTosync());
+        if (!(localBMCReadyToSync && siblingBMCReadyToSync))
+        {
+            lg2::error("Either local or sibling BMC is not ready to sync "
+                       "so, background sync cannot be done");
+            setSyncEventsHealth(SyncEventsHealth::Critical);
+            co_return;
+        }
+    }
+
     std::ranges::for_each(
         _dataSyncConfiguration |
             std::views::filter([this](const auto& dataSyncCfg) {
@@ -205,11 +240,11 @@ sdbusplus::async::task<bool>
 #ifdef UNIT_TEST
     syncCmd.append(" "s);
 #else
-    syncCmd.append(" rsync://localhost:"s);
-    static const auto* siblingBMCRsyncdPort =
-        _extDataIfaces->siblingBmcPos() == 0 ? BMC0_RSYNC_PORT
-                                             : BMC1_RSYNC_PORT;
-    syncCmd.append(siblingBMCRsyncdPort);
+    static const std::string rsyncdURL(std::format(" rsync://localhost:{}/{}",
+            (_extDataIfaces->siblingBmcPos() == 0 ? BMC0_RSYNC_PORT
+                                                  : BMC1_RSYNC_PORT),
+            RSYNCD_MODULE_NAME));
+    syncCmd.append(rsyncdURL);
 #endif
 
     // Add destination data path if configured
@@ -235,8 +270,9 @@ sdbusplus::async::task<bool>
 
         lg2::error(
             "Error syncing [{PATH}], ErrCode : {ERRCODE}, Error : {ERROR}",
+            "RsyncCLI: [RSYNC_CMD]",
             "PATH", dataSyncCfg._path, "ERRCODE", result.first, "ERROR",
-            result.second);
+            result.second, "RSYNC_CMD", syncCmd);
 
         co_return false;
     }
@@ -321,7 +357,7 @@ void Manager::disableSyncPropChanged(bool disableSync)
     else
     {
         lg2::info("Sync is Enabled, Starting events");
-        _ctx.spawn(startSyncEvents());
+        _ctx.spawn(startSyncEvents(true));
     }
 }
 
@@ -367,9 +403,24 @@ void Manager::setSyncEventsHealth(const SyncEventsHealth& syncEventsHealth)
 }
 
 // NOLINTNEXTLINE
-sdbusplus::async::task<void> Manager::startFullSync()
+sdbusplus::async::task<void> Manager::startFullSync(bool waitForSyncServ)
 {
-    setFullSyncStatus(FullSyncStatus::FullSyncInProgress);
+    if (waitForSyncServ)
+    {
+        auto [localBMCReadyToSync, siblingBMCReadyToSync] =
+            co_await sdbusplus::async::execution::when_all(
+                    _extDataIfaces->waitForSyncService(),
+                    _extDataIfaces->waitForSiblingBMCReadyTosync());
+        if (!(localBMCReadyToSync && siblingBMCReadyToSync))
+        {
+            lg2::error("Either local or sibling BMC is not ready to sync "
+                       "so, full sync cannot be done");
+            _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncFailed);
+            co_return;
+        }
+    }
+
+    _syncBMCDataIface.full_sync_status(FullSyncStatus::FullSyncInProgress);
     lg2::info("Full Sync started");
 
     auto fullSyncStartTime = std::chrono::steady_clock::now();
